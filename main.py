@@ -6,6 +6,9 @@ from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher import FSMContext
 from keyboards import *
 
+import numpy as np
+import string
+
 NAME_STATE = "name"
 LOGGED_STATE = "logged"
 NEW_GAME_NAME_STATE = "new_game_name"
@@ -18,12 +21,10 @@ GAME_DELETION_CONFIRMATION_STATE = "game_deletion_confirmation"
 JOIN_STATE = "join"
 JOIN_CANCELLATION_STATE = "join_cancellation"
 # new states
+GAME_CHOICE_STATE = "game_choice"
 GAME_STATE = "game"
-GAME_CLOSE_STATE = "game_close"
 GAME_MOVE_STATE = "game_move"
-GAME_MOVE_CANCEL_STATE = "game_move_cancel"
 GAME_CHAT_STATE = "game_chat"
-GAME_CHAT_CANCEL_STATE = "game_chat_cancel"
 GAME_RESIGN_STATE = "game_resign"
 
 
@@ -46,7 +47,10 @@ class Chat:
         self.messages.append(f"{sender}: {message}")
 
     def display(self):
-        return "\n".join(self.messages)
+        text = "\n".join(self.messages)
+        if text == "":
+            text = "Chat history si empty"
+        return text
 
 
 class LiveGame:
@@ -54,7 +58,7 @@ class LiveGame:
         self.game = game
         self.opponent = opponent
         self.opponent_id = opponent_id
-        self.board = None
+        self.board = Board(self.game.size)
         self.chat = Chat()
 
     def __str__(self):
@@ -66,6 +70,9 @@ class LiveGame:
             return self.game.creator_id
         else:
             return self.opponent_id
+
+    def is_creator(self, uid):
+        return uid == self.game.creator_id
 
 
 class GameBuilder:
@@ -95,8 +102,86 @@ class GameBuilder:
         return self
 
 
-def main():
+class Board:
+    WHITE_CIRCLE = '⚪️'
+    BLACK_CIRCLE = '⚫️'
+    BROWN_CIRCLE = '🟠'
+    EMPTY = ' '
 
+    BLACK = 1
+    WHITE = 2
+
+    FINE = 100
+    INVALID_POSITION = 200
+    PLACE_TAKEN = 201
+    ILLEGAL_SUICIDE = 202
+    ILLEGAL_KO = 203
+    INVALID_NOTATION = 204
+
+    def __init__(self, size):
+        self.board_array = np.zeros((size, size))
+        self.groups_array = np.zeros((size, size))
+        self.size = size
+        self.current_move = Board.BLACK
+
+    def make_move(self, move: str):
+        if len(move) not in (2, 3):
+            return self.INVALID_NOTATION
+
+        letter = move[0]
+        digit = move[1:]
+        if letter not in string.ascii_lowercase:
+            return self.INVALID_NOTATION
+        if not digit.isdigit():
+            return self.INVALID_NOTATION
+        move = string.ascii_lowercase.find(letter), int(digit)
+        if move[0] >= self.size:
+            return self.INVALID_POSITION
+        if move[1] >= self.size:
+            return self.INVALID_POSITION
+        if self.board_array[move] != 0:
+            return self.PLACE_TAKEN
+
+        # here be game logic
+
+        self.board_array[move] = self.current_move
+
+        if self.current_move == self.BLACK:
+            self.current_move = self.WHITE
+        else:
+            self.current_move = self.BLACK
+
+        return self.FINE
+
+    def display(self):
+        result_array = []
+        for i, row in enumerate(self.board_array):
+            text_array = []
+            for cell in row:
+                if cell == 0:
+                    text_array.append(self.BROWN_CIRCLE)
+                if cell == self.BLACK:
+                    text_array.append(self.BLACK_CIRCLE)
+                if cell == self.WHITE:
+                    text_array.append(self.WHITE_CIRCLE)
+            text_array.append(string.ascii_uppercase[i])
+            result_array.append("".join(text_array))
+        separator = "\n"
+        numbers = []
+        for i in range(self.size):
+            num = str(i)
+            numbers.append(num)
+            if i < 10:
+                numbers.append("  ")
+            numbers.append(" "*(3 - len(num)))
+
+        result_array.insert(0, "".join(numbers))
+        return separator.join(result_array)
+
+    def update_groups(self):
+        pass
+
+def main():
     bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher(bot, storage=MemoryStorage())
     users = set()
@@ -164,7 +249,7 @@ def main():
         uid = message.chat.id
         game_builder: GameBuilder = game_builders[uid]
         game_builder.name(game_name)
-        await message.answer(f"The game name is set to '{game_name},' are you OK with it? \nY/N?",
+        await message.answer(f"The game name is set to '{game_name}', are you OK with it? \nY/N?",
                              reply_markup=y_n_keyboard)
         await state.set_state(NEW_GAME_NAME_CONFIRMATION_STATE)
 
@@ -224,7 +309,7 @@ def main():
 
     @dp.message_handler(commands=['list'], state=LOGGED_STATE)
     async def list_handler(message: types.Message, state: FSMContext):
-        text = "\n".join([f"{i+1}) {str(game)}" for i, game in enumerate(new_games.values())])
+        text = "\n".join([f"{i + 1}) {str(game)}" for i, game in enumerate(new_games.values())])
         if len(new_games) == 0:
             text = "There is no games yet"
         await message.answer(text, reply_markup=logged_keyboard)
@@ -233,7 +318,7 @@ def main():
     async def list_my(message: types.Message, state: FSMContext):
         name = (await state.get_data())["name"]
         my_games = filter(lambda game: True if game.creator == name else False, new_games.values())
-        text = "\n".join((f"{i+1}) {str(game)}" for i, game in enumerate(my_games)))
+        text = "\n".join((f"{i + 1}) {str(game)}" for i, game in enumerate(my_games)))
         if len(text) == 0:
             text = "There is no your games yet"
         await message.answer(text, reply_markup=logged_keyboard)
@@ -242,7 +327,7 @@ def main():
     async def list_my_live(message: types.Message, state: FSMContext):
         name = (await state.get_data())["name"]
         my_games = await live_games_by_name(name)
-        text = "\n".join((f"{i+1}) {str(game)}" for i, game in enumerate(my_games)))
+        text = "\n".join((f"{i + 1}) {str(game)}" for i, game in enumerate(my_games)))
         if len(text) == 0:
             text = "There is no your live games yet"
         await message.answer(text, reply_markup=logged_keyboard)
@@ -298,6 +383,11 @@ def main():
         await message.answer("Enter the name of the game you want to join. Enter /cancel_join to cancel joining",
                              reply_markup=ReplyKeyboardRemove())
 
+    @dp.message_handler(commands=['cancel_join'], state=JOIN_STATE)
+    async def join_cancel(message: types.Message, state: FSMContext):
+        await message.answer("Are you sure? \n Y/N", reply_markup=y_n_keyboard)
+        await state.set_state(JOIN_CANCELLATION_STATE)
+
     @dp.message_handler(state=JOIN_STATE)
     async def join_game_name(message: types.Message, state: FSMContext):
         game_name = message.text
@@ -307,15 +397,11 @@ def main():
             return
         game = new_games.pop(game_name)
         live_games[game_name] = LiveGame(game, name, message.chat.id)
-        await message.answer("You connected to the game. Enter /play to start playing it")
+        await message.answer("You connected to the game. Enter /play to start playing it",
+                             reply_markup=logged_keyboard)
         await bot.send_message(game.creator_id, f"Player {name} connected to your game {game_name}",
                                reply_markup=logged_keyboard)
         await state.set_state(LOGGED_STATE)
-
-    @dp.message_handler(commands=['cancel_join'], state=JOIN_STATE)
-    async def join_cancel(message: types.Message, state: FSMContext):
-        await message.answer("Are you sure? \n Y/N", reply_markup=y_n_keyboard)
-        await state.set_state(JOIN_CANCELLATION_STATE)
 
     @dp.message_handler(state=JOIN_CANCELLATION_STATE)
     async def join_cancel_confirm(message: types.Message, state: FSMContext):
@@ -330,6 +416,128 @@ def main():
 
         else:
             await message.answer("Y/N")
+
+    @dp.message_handler(commands=['play'], state=LOGGED_STATE)
+    async def play_handler(message: types.Message, state: FSMContext):
+        await state.set_state(GAME_CHOICE_STATE)
+        await message.answer("Enter the name of the game you want to play."
+                             " Enter /cancel_play to cancel", reply_markup=ReplyKeyboardRemove())
+
+    @dp.message_handler(commands=['cancel_play'], state=GAME_CHOICE_STATE)
+    async def cancel_play(message: types.Message, state: FSMContext):
+        await state.set_state(LOGGED_STATE)
+        await message.answer("Game selection cancelled", reply_markup=logged_keyboard)
+
+    @dp.message_handler(state=GAME_CHOICE_STATE)
+    async def game_choice(message: types.Message, state: FSMContext):
+        game_name = message.text
+        name = (await state.get_data())['name']
+        the_game = await live_game_by_name(game_name, name)
+        if the_game is None:
+            await message.answer("You didn't join game with such name. Enter /cancel_play to cancel")
+            return
+        await state.update_data({"current_game": game_name})
+        await state.set_state(GAME_STATE)
+        await message.answer("/make_move - make move \n"
+                             "/chat - open game chat \n"
+                             "/resign - resign \n"
+                             "/close_game - stop playing game (You will be able to play it later)",
+                             reply_markup=game_keyboard)
+
+    @dp.message_handler(commands=['close_game'], state=GAME_STATE)
+    async def close_game(message: types.Message, state: FSMContext):
+        await state.set_state(LOGGED_STATE)
+        await message.answer("You closed the game", reply_markup=logged_keyboard)
+
+    @dp.message_handler(commands=['chat'], state=GAME_STATE)
+    async def chat_handler(message: types.Message, state: FSMContext):
+        await state.set_state(GAME_CHAT_STATE)
+        await message.answer("You entered chat. Enter /history to view chat history. Enter /close_chat to close chat",
+                             reply_markup=chat_keyboard)
+
+    @dp.message_handler(commands=['history'], state=GAME_CHAT_STATE)
+    async def history_handler(message: types.Message, state: FSMContext):
+        player_data = await state.get_data()
+        game_name = player_data['current_game']
+        name = player_data['name']
+        the_game = await live_game_by_name(game_name, name)
+        chat = the_game.chat
+        await message.answer(chat.display(),
+                             reply_markup=chat_keyboard)
+
+    @dp.message_handler(commands=['close_chat'], state=GAME_CHAT_STATE)
+    async def close_chat(message: types.Message, state: FSMContext):
+        await state.set_state(GAME_STATE)
+        await message.answer("You closed the chat", reply_markup=game_keyboard)
+
+    @dp.message_handler(state=GAME_CHAT_STATE)
+    async def chatting_handler(message: types.Message, state: FSMContext):
+        player_data = await state.get_data()
+        text = message.text
+        uid = message.chat.id
+        game_name = player_data['current_game']
+        name = player_data['name']
+        the_game = await live_game_by_name(game_name, name)
+        opponent_id = the_game.other_player(uid)
+        chat = the_game.chat
+        chat.add(text, name)
+        await bot.send_message(opponent_id, f"{name}: {text}")
+
+    @dp.message_handler(commands=['make_move'], state=GAME_STATE)
+    async def move_handler(message: types.Message, state: FSMContext):
+        await message.answer("Now make a move. Enter the letter, then the number. i.e. a0, f10, e3"
+                             "Enter /cancel_move to cancel.", reply_markup=ReplyKeyboardRemove())
+        await state.set_state(GAME_MOVE_STATE)
+
+    @dp.message_handler(commands=['cancel_move'], state=GAME_MOVE_STATE)
+    async def cancel_move(message: types.Message, state: FSMContext):
+        await message.answer("Cancelled the move", reply_markup=game_keyboard)
+        await state.set_state(GAME_STATE)
+
+    @dp.message_handler(state=GAME_MOVE_STATE)
+    async def make_move(message: types.Message, state: FSMContext):
+        move = message.text
+        player_data = await state.get_data()
+        uid = message.chat.id
+        game_name = player_data['current_game']
+        name = player_data['name']
+        the_game = await live_game_by_name(game_name, name)
+        opponent_id = the_game.other_player(uid)
+        board = the_game.board
+        result = board.make_move(move)
+        color = board.WHITE
+        if the_game.is_creator(uid):
+            color = board.BLACK
+        if the_game.opponent_id == the_game.game.creator_id:
+            color = board.current_move
+        if color != board.current_move:
+            await message.answer("It's not your turn")
+        elif result == board.INVALID_NOTATION:
+            await message.answer("Move should be letter and a number without a space i.e a0, f10 or e3")
+        elif result == board.INVALID_POSITION:
+            await message.answer("You are trying to place a stone outside of the board")
+        elif result == board.PLACE_TAKEN:
+            await message.answer("There is already a stone there")
+        elif result == board.ILLEGAL_SUICIDE:
+            await message.answer("This move kills your stones, it's illegal")
+        elif result == board.ILLEGAL_KO:
+            await message.answer("This move repeats positions, first make a move somewhere else")
+        elif result == board.FINE:
+            await bot.send_message(opponent_id, f"{name} made a move in the game {game_name}")
+            await bot.send_message(opponent_id, board.display())
+        else:
+            raise NotImplementedError(f"Unexpected board return code: {result}")
+
+    async def live_game_by_name(game_name, name):
+        my_games = await live_games_by_name(name)
+        the_game = None
+        for game in my_games:
+            if game.game.name == game_name:
+                the_game = game
+                break
+        return the_game
+
+    # raise NotImplemented("End implementing game stuff")
 
     executor.start_polling(dp, skip_updates=True)
 
