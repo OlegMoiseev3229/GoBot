@@ -20,12 +20,14 @@ GAME_DELETION_STATE = "game_deletion"
 GAME_DELETION_CONFIRMATION_STATE = "game_deletion_confirmation"
 JOIN_STATE = "join"
 JOIN_CANCELLATION_STATE = "join_cancellation"
-# new states
 GAME_CHOICE_STATE = "game_choice"
 GAME_STATE = "game"
 GAME_MOVE_STATE = "game_move"
 GAME_CHAT_STATE = "game_chat"
 GAME_RESIGN_STATE = "game_resign"
+# new states
+TAKE_OFF_STATE = "take_off"
+TAKE_OFF_CONFIRM_STATE = "take_off_confirm"
 
 
 class Game:
@@ -63,7 +65,7 @@ class LiveGame:
 
     def __str__(self):
         return f"{self.game.name}: {self.game.creator} vs {self.opponent} \n" \
-               f"    {self.game.size}x{self.game.size}"
+               f"    {self.game.size}x{self.game.size}. {self.current_player()}'s move"
 
     def other_player(self, player_id):
         if player_id == self.opponent_id:
@@ -73,6 +75,12 @@ class LiveGame:
 
     def is_creator(self, uid):
         return uid == self.game.creator_id
+
+    def current_player(self):
+        if self.board.current_move == self.board.BLACK:
+            return self.game.creator
+        else:
+            return self.opponent
 
 
 class GameBuilder:
@@ -117,12 +125,18 @@ class Board:
     ILLEGAL_SUICIDE = 202
     ILLEGAL_KO = 203
     INVALID_NOTATION = 204
+    GAME_END = 300
 
     def __init__(self, size):
         self.board_array = np.zeros((size, size))
         self.groups_array = np.zeros((size, size))
+        self.group_dict = dict()
         self.size = size
         self.current_move = Board.BLACK
+        self.black_score = 0
+        self.white_score = 0
+        self.passes = 0
+        self.end = False
 
     def make_move(self, move: str):
         if len(move) not in (2, 3):
@@ -145,11 +159,15 @@ class Board:
         # here be game logic
 
         self.board_array[move] = self.current_move
+        self.update_groups()
+        self.take_dead_stones()
 
         if self.current_move == self.BLACK:
             self.current_move = self.WHITE
         else:
             self.current_move = self.BLACK
+
+        self.passes = 0
 
         return self.FINE
 
@@ -179,7 +197,96 @@ class Board:
         return separator.join(result_array)
 
     def update_groups(self):
-        pass
+        self.groups_array = np.zeros((self.size, self.size))
+        self.group_dict = dict()
+        group_n = 0
+        for i in range(self.size):
+            for j in range(self.size):
+                if self.groups_array[i][j] != 0:
+                    continue
+                group_n += 1
+                stone = (i, j)
+                color = self.board_array[stone]
+                self.group_dict[group_n] = Group(group_n, color)
+                self.fill_group(stone, color, group_n)
+
+    def fill_group(self, stone, color, group_n):
+        try:
+            group = self.group_dict[group_n]
+            if self.groups_array[stone] == group_n:
+                return
+            if self.board_array[stone] == color:
+                self.groups_array[stone] = group_n
+                group.add_stone(stone)
+                for s in self.stone_neighbours(stone):
+                    self.fill_group(s, color, group_n)
+            else:
+                neigh_group = self.group_dict.get(self.groups_array[stone], None)
+                if neigh_group is None:
+                    return
+                group.add_neighbour(neigh_group)
+                neigh_group.add_neighbour(group)
+        except IndexError:
+            print("Index error occurred")
+
+    def stone_neighbours(self, stone):
+        stones = [(stone[0]-1, stone[1]),
+                  (stone[0], stone[1]-1),
+                  (stone[0]+1, stone[1]),
+                  (stone[0], stone[1]+1)]
+        for s in stones:
+            if s[0] >= self.size or s[0] < 0:
+                stones.remove(s)
+            elif s[1] >= self.size or s[1] < 0:
+                stones.remove(s)
+        return stones
+
+    def take_dead_stones(self):
+        for group in self.group_dict.values():
+            if group.color == 0:
+                continue
+            if group.is_dead():
+                for stone in group.stones:
+                    color = self.board_array[stone]
+                    if color == self.BLACK:
+                        self.black_score += 1
+                    elif color == self.WHITE:
+                        self.white_score += 1
+                    self.board_array[stone] = 0
+
+    def passing(self):
+        self.passes += 1
+        if self.passes == 2:
+            self.end = True
+            return self.GAME_END
+        if self.current_move == self.BLACK:
+            self.current_move = self.WHITE
+        else:
+            self.current_move = self.BLACK
+        return self.FINE
+
+
+class Group:
+    def __init__(self, group_id, color):
+        self.group_id = group_id
+        self.color = color
+        self.stones = set()
+        self.neighbours = set()
+
+    def add_stone(self, stone):
+        self.stones.add(stone)
+
+    def add_neighbour(self, neighbour):
+        self.neighbours.add(neighbour)
+
+    def is_dead(self):
+        dead = True
+        for n in self.neighbours:
+            if n.color == 0:
+                dead = False
+                break
+        return dead
+
 
 def main():
     bot = Bot(token=BOT_TOKEN)
@@ -439,7 +546,9 @@ def main():
         await state.update_data({"current_game": game_name})
         await state.set_state(GAME_STATE)
         await message.answer("/make_move - make move \n"
+                             "/board - look at the board\n"
                              "/chat - open game chat \n"
+                             "/pass - pass\n"
                              "/resign - resign \n"
                              "/close_game - stop playing game (You will be able to play it later)",
                              reply_markup=game_keyboard)
@@ -483,16 +592,32 @@ def main():
         chat.add(text, name)
         await bot.send_message(opponent_id, f"{name}: {text}")
 
+    @dp.message_handler(commands=['board'], state=GAME_STATE)
+    async def display_board(message: types.Message, state: FSMContext):
+        player_data = await state.get_data()
+        game_name = player_data['current_game']
+        name = player_data['name']
+        the_game = await live_game_by_name(game_name, name)
+        await message.answer(the_game.board.display())
+
     @dp.message_handler(commands=['make_move'], state=GAME_STATE)
     async def move_handler(message: types.Message, state: FSMContext):
         await message.answer("Now make a move. Enter the letter, then the number. i.e. a0, f10, e3"
-                             "Enter /cancel_move to cancel.", reply_markup=ReplyKeyboardRemove())
+                             "Enter /cancel_move to cancel.", reply_markup=make_move_keyboard)
         await state.set_state(GAME_MOVE_STATE)
 
     @dp.message_handler(commands=['cancel_move'], state=GAME_MOVE_STATE)
     async def cancel_move(message: types.Message, state: FSMContext):
         await message.answer("Cancelled the move", reply_markup=game_keyboard)
         await state.set_state(GAME_STATE)
+
+    @dp.message_handler(commands=['board'], state=GAME_MOVE_STATE)
+    async def display_board(message: types.Message, state: FSMContext):
+        player_data = await state.get_data()
+        game_name = player_data['current_game']
+        name = player_data['name']
+        the_game = await live_game_by_name(game_name, name)
+        await message.answer(the_game.board.display())
 
     @dp.message_handler(state=GAME_MOVE_STATE)
     async def make_move(message: types.Message, state: FSMContext):
@@ -504,29 +629,91 @@ def main():
         the_game = await live_game_by_name(game_name, name)
         opponent_id = the_game.other_player(uid)
         board = the_game.board
-        result = board.make_move(move)
+        if board.end:
+            await message.answer("The game is in taking off stage. Enter /take_off",
+                                 reply_markup=game_keyboard)
+            await state.set_state(GAME_STATE)
         color = board.WHITE
         if the_game.is_creator(uid):
             color = board.BLACK
         if the_game.opponent_id == the_game.game.creator_id:
             color = board.current_move
         if color != board.current_move:
-            await message.answer("It's not your turn")
-        elif result == board.INVALID_NOTATION:
-            await message.answer("Move should be letter and a number without a space i.e a0, f10 or e3")
+            await message.answer("It's not your turn",
+                                 reply_markup=make_move_keyboard)
+            return
+        result = board.make_move(move)
+        if result == board.INVALID_NOTATION:
+            await message.answer("Move should be letter and a number without a space i.e a0, f10 or e3",
+                                 reply_markup=make_move_keyboard)
         elif result == board.INVALID_POSITION:
-            await message.answer("You are trying to place a stone outside of the board")
+            await message.answer("You are trying to place a stone outside of the board",
+                                 reply_markup=make_move_keyboard)
         elif result == board.PLACE_TAKEN:
-            await message.answer("There is already a stone there")
+            await message.answer("There is already a stone there",
+                                 reply_markup=make_move_keyboard)
         elif result == board.ILLEGAL_SUICIDE:
-            await message.answer("This move kills your stones, it's illegal")
+            await message.answer("This move kills your stones, it's illegal",
+                                 reply_markup=make_move_keyboard)
         elif result == board.ILLEGAL_KO:
-            await message.answer("This move repeats positions, first make a move somewhere else")
+            await message.answer("This move repeats positions, first make a move somewhere else",
+                                 reply_markup=make_move_keyboard)
         elif result == board.FINE:
-            await bot.send_message(opponent_id, f"{name} made a move in the game {game_name}")
+            await bot.send_message(opponent_id, f"{name} made a move in the game {game_name}",
+                                   reply_markup=make_move_keyboard)
             await bot.send_message(opponent_id, board.display())
         else:
             raise NotImplementedError(f"Unexpected board return code: {result}")
+
+    @dp.message_handler(commands=['resign'], state=GAME_STATE)
+    async def resign_handler(message: types.Message, state: FSMContext):
+        await state.set_state(GAME_RESIGN_STATE)
+        await message.answer("Are you sure? Y/N", reply_markup=y_n_keyboard)
+
+    @dp.message_handler(state=GAME_RESIGN_STATE)
+    async def resign(message: types.Message, state: FSMContext):
+        text = message.text.lower()
+        if text == "y":
+            uid = message.chat.id
+            player_data = await state.get_data()
+            game_name = player_data['current_game']
+            name = player_data['name']
+            the_game = await live_game_by_name(game_name, name)
+            opponent_id = the_game.other_player(uid)
+            await bot.send_message(opponent_id, f"{name} has resigned in game '{game_name}', you won!")
+            live_games.pop(game_name)
+        if text == "n":
+            await state.set_state(GAME_STATE)
+            await message.answer("Resignation cancelled",
+                                 reply_markup=game_keyboard)
+        else:
+            await message.answer("Y/N", reply_markup=y_n_keyboard)
+
+    @dp.message_handler(commands=['pass'], state=GAME_STATE)
+    async def pass_handler(message: types.Message, state: FSMContext):
+        uid = message.chat.id
+        player_data = await state.get_data()
+        game_name = player_data['current_game']
+        name = player_data['name']
+        the_game = await live_game_by_name(game_name, name)
+        board = the_game.board
+        opponent_id = the_game.other_player(uid)
+        color = board.WHITE
+        if the_game.is_creator(uid):
+            color = board.BLACK
+        if the_game.opponent_id == the_game.game.creator_id:
+            color = board.current_move
+        if color != board.current_move:
+            await message.answer("It's not your turn",
+                                 reply_markup=make_move_keyboard)
+            return
+        result = board.passing()
+        if result == board.FINE:
+            await bot.send_message(opponent_id, f"{name} has passed in game '{game_name}'")
+        elif result == board.GAME_END:
+            await bot.send_message(opponent_id, f"{name} has also passed in game '{game_name}', take off dead stones."
+                                                f"Enter /take_off")
+            await message.answer("Take off the dead stones. Enter /take_off")
 
     async def live_game_by_name(game_name, name):
         my_games = await live_games_by_name(name)
@@ -536,8 +723,6 @@ def main():
                 the_game = game
                 break
         return the_game
-
-    # raise NotImplemented("End implementing game stuff")
 
     executor.start_polling(dp, skip_updates=True)
 
