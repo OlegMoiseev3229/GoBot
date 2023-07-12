@@ -1,0 +1,13 @@
+[Unit]
+Description=Telegram Bot
+After=network.target
+
+[Service]
+User=oleg
+Group=oleg
+WorkingDirectory=/home/oleg/GoBot/
+Environment="PYTHONPATH=/home/oleg/GoBot/"
+ExecStart=/home/oleg/GoBot/.venv/bin/python /home/oleg/GoBot/main.py
+
+[Install]
+WantedBy=multi-user.target

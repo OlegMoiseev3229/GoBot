@@ -137,6 +137,7 @@ class Board:
         self.white_score = 0
         self.passes = 0
         self.end = False
+        self.take_off_list = TakeOffList()
 
     def make_move(self, move: str):
         if len(move) not in (2, 3):
@@ -286,6 +287,23 @@ class Group:
                 dead = False
                 break
         return dead
+
+
+class TakeOffList:
+    def __init__(self):
+        self.black = []
+        self.white = []
+        self.black_agree = False
+        self.white_agree = False
+
+    def is_ready(self):
+        return self.white_agree and self.black_agree
+
+    def black_add(self, stone):
+        self.black.append(stone)
+
+    def white_add(self, stone):
+        self.white.append(stone)
 
 
 def main():
@@ -682,6 +700,8 @@ def main():
             opponent_id = the_game.other_player(uid)
             await bot.send_message(opponent_id, f"{name} has resigned in game '{game_name}', you won!")
             live_games.pop(game_name)
+            await state.set_state(LOGGED_STATE)
+            await message.answer("You resigned the game", reply_markup=logged_keyboard)
         if text == "n":
             await state.set_state(GAME_STATE)
             await message.answer("Resignation cancelled",
@@ -714,6 +734,23 @@ def main():
             await bot.send_message(opponent_id, f"{name} has also passed in game '{game_name}', take off dead stones."
                                                 f"Enter /take_off")
             await message.answer("Take off the dead stones. Enter /take_off")
+
+    @dp.message_handler(commands=['take_off'], state=GAME_STATE)
+    async def take_off_handler(message: types.Message, state: FSMContext):
+        await message.answer("To take off a group enter one of the stones. To end enter /take_off_commit"
+                             " Enter /board to look at the board")
+        await state.set_state(TAKE_OFF_STATE)
+
+    @dp.message_handler(commands=['cancel_take_off'], state=TAKE_OFF_STATE)
+    async def cancel_take_off(message: types.Message, state: FSMContext):
+        await message.answer("Taking off stones cancelled")
+        await state.set_state(GAME_STATE)
+
+    @dp.message_handler(commands=)
+
+    @dp.message_handler(commands=['take_off_confirm'], state=GAME_STATE)
+    async def take_off_confirmation_handler(message: types.Message, state: FSMContext):
+        raise NotImplementedError
 
     async def live_game_by_name(game_name, name):
         my_games = await live_games_by_name(name)
