@@ -82,6 +82,11 @@ class LiveGame:
         else:
             return self.opponent
 
+    def result(self):
+        return f"The game {self.game.name} has ended. \n" \
+               f"{self.game.creator}: {self.board.black_score} vs {self.opponent}: {self.board.white_score} \n" \
+               f"{'White' if self.board.white_score >= self.board.black_score else 'Black'} won"
+
 
 class GameBuilder:
     def __init__(self):
@@ -156,8 +161,6 @@ class Board:
             return self.INVALID_POSITION
         if self.board_array[move] != 0:
             return self.PLACE_TAKEN
-
-        # here be game logic
 
         self.board_array[move] = self.current_move
         self.update_groups()
@@ -266,6 +269,63 @@ class Board:
             self.current_move = self.BLACK
         return self.FINE
 
+    def mark_dead_stone(self, move, color):
+        if len(move) not in (2, 3):
+            return self.INVALID_NOTATION
+
+        letter = move[0]
+        digit = move[1:]
+
+        if not self.end:
+            raise RuntimeError("Trying to take off stones before the end of the game")
+        if letter not in string.ascii_lowercase:
+            return self.INVALID_NOTATION
+        if not digit.isdigit():
+            return self.INVALID_NOTATION
+        move = string.ascii_lowercase.find(letter), int(digit)
+        if move[0] >= self.size:
+            return self.INVALID_POSITION
+        if move[1] >= self.size:
+            return self.INVALID_POSITION
+        if self.board_array[move] != 0:
+            if color == self.BLACK:
+                self.take_off_list.black_add(move)
+            if color == self.WHITE:
+                self.take_off_list.white_add(move)
+            return self.PLACE_TAKEN
+        return self.FINE
+
+    def end_game(self):
+        dead_groups = set()
+        for stone in self.take_off_list.black:
+            dead_groups.add(self.group_dict[self.groups_array[stone]])
+        for stone in self.take_off_list.white:
+            dead_groups.add(self.group_dict[self.groups_array[stone]])
+
+        for group in dead_groups:
+            for stone in group.stones:
+                color = self.board_array[stone]
+                if color == self.BLACK:
+                    self.white_score += 1
+                elif color == self.WHITE:
+                    self.black_score += 1
+                self.board_array[stone] = 0
+
+        self.update_groups()
+
+        for group in self.group_dict.values():
+            if group.color != 0:
+                continue
+            neigh_colors = set()
+            for neighbour in group.neighbours:
+                neigh_colors.add(neighbour.color)
+            if len(neigh_colors) == 1:
+                color = neigh_colors.pop()
+                if color == self.BLACK:
+                    self.black_score += len(group.stones)
+                elif color == self.WHITE:
+                    self.white_score += len(group.stones)
+
 
 class Group:
     def __init__(self, group_id, color):
@@ -295,9 +355,8 @@ class TakeOffList:
         self.white = []
         self.black_agree = False
         self.white_agree = False
-
-    def is_ready(self):
-        return self.white_agree and self.black_agree
+        self.black_ready = False
+        self.white_ready = False
 
     def black_add(self, stone):
         self.black.append(stone)
@@ -737,6 +796,15 @@ def main():
 
     @dp.message_handler(commands=['take_off'], state=GAME_STATE)
     async def take_off_handler(message: types.Message, state: FSMContext):
+        uid = message.chat.id
+        player_data = await state.get_data()
+        game_name = player_data['current_game']
+        name = player_data['name']
+        the_game = await live_game_by_name(game_name, name)
+        board = the_game.board
+        if not board.end:
+            await message.answer("The game hasn't ended yet")
+            return
         await message.answer("To take off a group enter one of the stones. To end enter /take_off_commit"
                              " Enter /board to look at the board")
         await state.set_state(TAKE_OFF_STATE)
@@ -746,11 +814,118 @@ def main():
         await message.answer("Taking off stones cancelled")
         await state.set_state(GAME_STATE)
 
-    @dp.message_handler(commands=)
+    @dp.message_handler(commands=['take_off_commit'], state=TAKE_OFF_STATE)
+    async def commit_take_off(message: types.Message, state: FSMContext):
+        uid = message.chat.id
+        player_data = await state.get_data()
+        game_name = player_data['current_game']
+        name = player_data['name']
+        the_game = await live_game_by_name(game_name, name)
+        board = the_game.board
+        color = board.WHITE
+        if the_game.is_creator(uid):
+            color = board.BLACK
+        if color == board.BLACK:
+            board.take_off_list.black_ready = True
+        if color == board.WHITE:
+            board.take_off_list.white_ready = True
+        if name == the_game.other_player(uid):
+            board.take_off_list.black_ready = True
+            board.take_off_list.white_ready = True
+        opponent_id = the_game.other_player(uid)
+        await bot.send_message(opponent_id, f"{name} in game: {game_name} has marked the dead stones.")
+        await message.answer("Ready", reply_markup=game_keyboard)
+
+    @dp.message_handler(state=TAKE_OFF_STATE)
+    async def take_off_stones(message: types.Message, state: FSMContext):
+        text = message.text
+        uid = message.chat.id
+        player_data = await state.get_data()
+        game_name = player_data['current_game']
+        name = player_data['name']
+        the_game = await live_game_by_name(game_name, name)
+        board = the_game.board
+        color = board.WHITE
+        if the_game.is_creator(uid):
+            color = board.BLACK
+        response = the_game.board.mark_dead_stone(text, color)
+        if response == board.FINE:
+            await message.answer("There is no stone there")
+        elif response == board.INVALID_POSITION:
+            await message.answer("It's outside of the board")
+        elif response == board.INVALID_NOTATION:
+            await message.answer("It should be a letter and a number without of space: i.e. a0, b1 or g14")
 
     @dp.message_handler(commands=['take_off_confirm'], state=GAME_STATE)
     async def take_off_confirmation_handler(message: types.Message, state: FSMContext):
-        raise NotImplementedError
+        text = message.text
+        uid = message.chat.id
+        player_data = await state.get_data()
+        game_name = player_data['current_game']
+        name = player_data['name']
+        the_game = await live_game_by_name(game_name, name)
+        board = the_game.board
+        color = board.WHITE
+        if the_game.is_creator(uid):
+            color = board.BLACK
+        if color == board.BLACK:
+            if board.take_off_list.black_agree:
+                await message.answer("You have already agreed")
+                return
+            other_ready = board.take_off_list.white_ready
+            if not other_ready:
+                await message.answer("The other player hasn't yes took the dead stones")
+                return
+            await message.answer(f"Other player suggested the following removes:{', '.join(board.take_off_list.white)}"
+                                 f"do you agree? Y/N?", reply_markup=y_n_keyboard)
+            await state.set_state(TAKE_OFF_CONFIRM_STATE)
+        else:
+            if board.take_off_list.white_agree:
+                await message.answer("You have already agreed")
+                return
+            other_ready = board.take_off_list.black_ready
+            if not other_ready:
+                await message.answer("The other player hasn't yes took the dead stones")
+                return
+            await message.answer(f"Other player suggested the following removes:{', '.join(board.take_off_list.black)}"
+                                 f"do you agree? Y/N?", reply_markup=y_n_keyboard)
+            await message.answer(board.display())
+            await state.set_state(TAKE_OFF_CONFIRM_STATE)
+
+    @dp.message_handler(state=TAKE_OFF_CONFIRM_STATE)
+    async def take_off_confirmation(message: types.Message, state: FSMContext):
+        text = message.text.lower()
+        if text == 'y':
+            agree = True
+        elif text == 'n':
+            agree = False
+        else:
+            await message.answer("Y/N")
+            return
+        uid = message.chat.id
+        player_data = await state.get_data()
+        game_name = player_data['current_game']
+        name = player_data['name']
+        the_game = await live_game_by_name(game_name, name)
+        board = the_game.board
+        color = board.WHITE
+        if the_game.is_creator(uid):
+            color = board.BLACK
+        opponent_id = the_game.other_player(uid)
+        if color == board.BLACK:
+            other_agree = board.take_off_list.white_agree
+        else:
+            other_agree = board.take_off_list.black_agree
+        if not agree:
+            board.take_off_list = TakeOffList()
+            await bot.send_message(opponent_id, f"{name} in the game {game_name} rejected your take off of stones")
+        else:
+            if other_agree:
+                board.end_game()
+                await message.answer(the_game.result(), reply_markup=logged_keyboard)
+                await bot.send_message(opponent_id, the_game.result())
+                live_games.pop(game_name)
+                await state.set_state(LOGGED_STATE)
 
     async def live_game_by_name(game_name, name):
         my_games = await live_games_by_name(name)
