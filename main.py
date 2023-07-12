@@ -829,12 +829,13 @@ def main():
             board.take_off_list.black_ready = True
         if color == board.WHITE:
             board.take_off_list.white_ready = True
-        if name == the_game.other_player(uid):
+        if uid == the_game.other_player(uid):
             board.take_off_list.black_ready = True
             board.take_off_list.white_ready = True
         opponent_id = the_game.other_player(uid)
         await bot.send_message(opponent_id, f"{name} in game: {game_name} has marked the dead stones.")
         await message.answer("Ready", reply_markup=game_keyboard)
+        await state.set_state(GAME_STATE)
 
     @dp.message_handler(state=TAKE_OFF_STATE)
     async def take_off_stones(message: types.Message, state: FSMContext):
@@ -874,7 +875,7 @@ def main():
                 return
             other_ready = board.take_off_list.white_ready
             if not other_ready:
-                await message.answer("The other player hasn't yes took the dead stones")
+                await message.answer("The other player hasn't yet took the dead stones")
                 return
             await message.answer(f"Other player suggested the following removes:{', '.join(board.take_off_list.white)}"
                                  f"do you agree? Y/N?", reply_markup=y_n_keyboard)
@@ -885,7 +886,7 @@ def main():
                 return
             other_ready = board.take_off_list.black_ready
             if not other_ready:
-                await message.answer("The other player hasn't yes took the dead stones")
+                await message.answer("The other player hasn't yet took the dead stones")
                 return
             await message.answer(f"Other player suggested the following removes:{', '.join(board.take_off_list.black)}"
                                  f"do you agree? Y/N?", reply_markup=y_n_keyboard)
