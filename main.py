@@ -806,7 +806,8 @@ def main():
             await message.answer("The game hasn't ended yet")
             return
         await message.answer("To take off a group enter one of the stones. To end enter /take_off_commit"
-                             " Enter /board to look at the board")
+                             " Enter /board to look at the board",
+                             reply_markup=ReplyKeyboardRemove())
         await state.set_state(TAKE_OFF_STATE)
 
     @dp.message_handler(commands=['cancel_take_off'], state=TAKE_OFF_STATE)
@@ -926,6 +927,10 @@ def main():
                 await message.answer(the_game.result(), reply_markup=logged_keyboard)
                 await bot.send_message(opponent_id, the_game.result())
                 live_games.pop(game_name)
+                await state.set_state(LOGGED_STATE)
+            else:
+                await message.answer("Now wait for the other player")
+                await bot.send_message(opponent_id, f"the player {name} has agreed to your removes in the game {game_name}")
                 await state.set_state(LOGGED_STATE)
 
     async def live_game_by_name(game_name, name):
