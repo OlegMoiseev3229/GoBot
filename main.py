@@ -374,6 +374,60 @@ def main():
     game_builders: Dict[int, GameBuilder] = dict()
     live_games: Dict[str, LiveGame] = dict()
 
+    @dp.message_handler(commands=['/guide'], state='*')
+    async def guide_handler(message: types.Message, state: FSMContext):
+        await message.answer("""
+        Welcome to the guide on my GoBot!
+        First of all, you should enter the /start command
+        Then you need to enter your name
+        -----------------------
+        To create a new game enter /new_game:
+          You will need to enter it's name and board size
+          You can delete a game using the /game_del command
+        ------------------------
+        To look at the list of games you can join, enter /list
+          /list_my will show the list of your games and /list_my_live will show the list of games you joined
+        ------------------------
+        To join a game you need to enter /join and then enter the name of the game
+        To play the game that you've joined, you need to enter /play and then the name of the game 
+        ------------------------
+        After entering /play you are in the game menu:
+          Enter /chat to open the chat with your opponent. There you can open chat history by entering /history
+          Enter /make_move to make a move
+            You will be sent to a menu, where you can enter /board to look at the boar
+            Moves should be a letter, followed by a number i.e. a0, e4 or f10
+          Enter /reign to resign
+          Enter /pass to pass
+            After both players pass, the game goes into the take off stage:
+            Enter /take_off to select groups you think are dead. It's enough to enter just one stone of a group
+            Enter /take_off_commit to commit to the dead stones
+            Enter /take_off_confirm to look at opponent's opinion of dead stones and agree/disagree with it
+
+        Приветствую вас в руководстве по своему GoBot
+        Прежде всего, вам стоит ввести комманду /start
+        Затем ввести своё имя
+        ----------------------
+        Чтобы создать новую игру введите /new_game:
+          Вам надо будет ввести её название и размер доски
+          Игру можно удалить с помощью комманды /game_del
+        ----------------------
+        Чтобы посмотреть на список игр, в которые можно зайти, введи /list
+          /list_my покажет список всех ваших игр, а /list_my_live покажет список всех игр, в которые вы вошли
+        ---------------------- 
+        Чтобы зайти в игру надо ввести /join и затем ввести название игры
+        Чтобы сыграть в игру, в которую вы зашли, надо ввести /play и затем название игры
+        ----------------------
+        После ввода комманды /play вы находитесь в меню игры:
+          Введите /chat чтобы открыть чат со своим противником. В чате можно открыть историю чата, введя /history
+          Ходы должны быть в формате: одна латинская буква, а затем число, например a0, e4 или f10
+        Введите /resign чтобы сдатся
+        Введите /pass чтобы спасовать
+            После того, как оба игрока спасуют, игра переходит в стадию снятия камней:
+            Введите /take_off чтобы выбрать группы камней, которые вы считаете мёртвыми. Достаточно ввести всего лишь один камень группы
+            Введите /take_off_commit чтобы подтведить свой выбор мёртвых камней
+            Введите /take_off_confirm чтобы посмотреть на мнение противника по мнению мёртвых камней и согласится/не согласится
+        """)
+
     @dp.message_handler(commands=['start'], state="*")
     async def start_handler(message: types.Message, state: FSMContext):
         users.add(message.chat.id)
