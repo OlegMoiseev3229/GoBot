@@ -374,7 +374,7 @@ def main():
     game_builders: Dict[int, GameBuilder] = dict()
     live_games: Dict[str, LiveGame] = dict()
 
-    @dp.message_handler(commands=['/guide'], state='*')
+    @dp.message_handler(commands=['guide'], state='*')
     async def guide_handler(message: types.Message, state: FSMContext):
         await message.answer("""
         Welcome to the guide on my GoBot!
@@ -972,6 +972,8 @@ def main():
             other_agree = board.take_off_list.white_agree
         else:
             other_agree = board.take_off_list.black_agree
+        if uid == the_game.other_player(uid):
+            other_agree = True
         if not agree:
             board.take_off_list = TakeOffList()
             await bot.send_message(opponent_id, f"{name} in the game {game_name} rejected your take off of stones")
